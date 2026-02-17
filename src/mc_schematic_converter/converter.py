@@ -116,10 +116,34 @@ def convert_v3_to_v2(input_path: str, output_path: str) -> None:
             print('Version -> 2')
 
         elif cn == 'Entities':
-            # v3 entity format lacks Rotation tag expected by WorldEdit 7.2.x
-            # Entity conversion between MC versions is unreliable; skip entirely
-            entity_count = len(cv[2]) if cv[0] == 'list' else 0
-            print(f'Entities: {entity_count} skipped (not supported in v2 conversion)')
+            # v3: {Id, Pos, Data: {id, Pos, Rotation, ...}}
+            # v2: {Id, Pos, Rotation, ...} (Data unwrapped)
+            if cv[0] == 'list' and cv[2]:
+                converted_entities = []
+                for entity in cv[2]:
+                    if entity[0] != 'compound':
+                        converted_entities.append(entity)
+                        continue
+                    entity_map = {ecn: (ect, ecv) for ect, ecn, ecv in entity[1]}
+                    new_entry = []
+                    if 'Id' in entity_map:
+                        ect, ecv = entity_map['Id']
+                        new_entry.append((ect, 'Id', ecv))
+                    if 'Pos' in entity_map:
+                        ect, ecv = entity_map['Pos']
+                        new_entry.append((ect, 'Pos', ecv))
+                    if 'Data' in entity_map:
+                        ect, ecv = entity_map['Data']
+                        if ecv[0] == 'compound':
+                            for dct, dcn, dcv in ecv[1]:
+                                if dcn in ('id', 'Pos'):
+                                    continue
+                                new_entry.append((dct, dcn, dcv))
+                    converted_entities.append(('compound', new_entry))
+                v2_entries.append((9, 'Entities', ('list', 10, converted_entities)))
+                print(f'Entities: {len(converted_entities)} converted')
+            else:
+                print('Entities: 0')
 
         elif cn == 'Blocks':
             blocks = {bcn: (bct, bcv) for bct, bcn, bcv in cv[1]}
