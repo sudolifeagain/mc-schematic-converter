@@ -24,6 +24,7 @@ Known limitations:
 """
 
 import gzip
+import math
 
 from .nbt import NBTReader, NBTWriter, find_tag
 
@@ -71,25 +72,29 @@ def _convert_entity_nbt(entries: list) -> list:
     """Convert entity NBT from 1.21+ to 1.20.1 format.
 
     - block_pos (IntArray[3]) -> TileX, TileY, TileZ (separate Int tags)
+      block_pos contains absolute world coords; derive from relative Pos instead
     - Item compound: count->Count, strip components
     - Strip Paper/Bukkit/Spigot specific tags
     """
     new = []
-    tile_xyz = None
+    has_block_pos = False
+    pos_values = None
     for tag_type, tag_name, tag_val in entries:
         if tag_name in _PAPER_TAGS:
             continue
+        if tag_name == 'Pos' and tag_val[0] == 'list' and len(tag_val[2]) >= 3:
+            pos_values = [item[1] for item in tag_val[2]]
         if tag_name == 'block_pos' and tag_val[0] == 'int_array' and tag_val[1] == 3:
-            tile_xyz = tag_val[2]
+            has_block_pos = True
             continue
         if tag_name == 'Item' and tag_val[0] == 'compound':
             new.append((tag_type, tag_name, ('compound', _convert_item(tag_val[1]))))
             continue
         new.append((tag_type, tag_name, tag_val))
-    if tile_xyz is not None:
-        new.append((3, 'TileX', ('int', tile_xyz[0])))
-        new.append((3, 'TileY', ('int', tile_xyz[1])))
-        new.append((3, 'TileZ', ('int', tile_xyz[2])))
+    if has_block_pos and pos_values is not None:
+        new.append((3, 'TileX', ('int', math.floor(pos_values[0]))))
+        new.append((3, 'TileY', ('int', math.floor(pos_values[1]))))
+        new.append((3, 'TileZ', ('int', math.floor(pos_values[2]))))
     return new
 
 
@@ -160,19 +165,37 @@ def convert_v3_to_v2(input_path: str, output_path: str) -> None:
                         continue
                     entity_map = {ecn: (ect, ecv) for ect, ecn, ecv in entity[1]}
                     new_entry = []
+                    outer_pos_vals = None
+                    inner_pos_vals = None
+                    inner_block_pos = None
                     if 'Id' in entity_map:
                         ect, ecv = entity_map['Id']
                         new_entry.append((ect, 'Id', ecv))
                     if 'Pos' in entity_map:
                         ect, ecv = entity_map['Pos']
+                        if ecv[0] == 'list' and len(ecv[2]) >= 3:
+                            outer_pos_vals = [item[1] for item in ecv[2]]
                         new_entry.append((ect, 'Pos', ecv))
                     if 'Data' in entity_map:
                         ect, ecv = entity_map['Data']
                         if ecv[0] == 'compound':
                             for dct, dcn, dcv in ecv[1]:
-                                if dcn in ('id', 'Pos'):
+                                if dcn == 'id':
                                     continue
+                                if dcn == 'Pos' and dcv[0] == 'list' and len(dcv[2]) >= 3:
+                                    inner_pos_vals = [item[1] for item in dcv[2]]
+                                    continue
+                                if dcn == 'block_pos' and dcv[0] == 'int_array' and dcv[1] == 3:
+                                    inner_block_pos = dcv[2]
                                 new_entry.append((dct, dcn, dcv))
+                    # Reconstruct precise relative Pos from absolute Data.Pos
+                    if inner_pos_vals and inner_block_pos and outer_pos_vals:
+                        offset = [inner_block_pos[i] - math.floor(outer_pos_vals[i]) for i in range(3)]
+                        corrected = [inner_pos_vals[i] - offset[i] for i in range(3)]
+                        for idx, (t, n, v) in enumerate(new_entry):
+                            if n == 'Pos':
+                                new_entry[idx] = (9, 'Pos', ('list', 6, [('double', p) for p in corrected]))
+                                break
                     new_entry = _convert_entity_nbt(new_entry)
                     converted_entities.append(('compound', new_entry))
                 v2_entries.append((9, 'Entities', ('list', 10, converted_entities)))
