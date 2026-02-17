@@ -1,32 +1,38 @@
-"""Convert Sponge Schematic v3 to v2 for WorldEdit 7.2.x compatibility.
+"""Sponge Schematic v3 to v2 structural converter.
 
-Sponge Schematic v3 (MC 1.20.5+) restructured the format:
-- Root is nested under a "Schematic" compound
-- Block data is nested under a "Blocks" compound
-- BlockEntity NBT is wrapped in a "Data" compound
-- Item format changed: count(Int) -> Count(Byte), components added
+Sponge Schematic v3 (introduced 2021, used by WorldEdit 7.3+) restructured
+the NBT layout compared to v2 (used by WorldEdit 7.2.x):
 
-WorldEdit 7.2.x (MC 1.20.1) only reads v2. This script performs the
-structural conversion to make v3 schematics loadable.
+  v3 structure:
+    Root("") -> Schematic -> Version, Blocks -> {Palette, Data, BlockEntities}
+    BlockEntity: {Id, Pos, Data: {id, Items, ...}}
+    Item: {id, count(Int), Slot, components}
+
+  v2 structure:
+    Root("Schematic") -> Version, Palette, PaletteMax, BlockData, BlockEntities
+    BlockEntity: {Id, Pos, Items, ...}
+    Item: {id, Count(Byte), Slot}
+
+This module performs the structural conversion so that v3 schematics can be
+loaded by WorldEdit 7.2.x (which only supports v1/v2).
 
 Known limitations:
-- Item components (enchantments, damage, custom names) are stripped
-- Sign text format (front_text/back_text vs Text1-Text4) is not converted
-- Blocks/items that don't exist in 1.20.1 will be air/lost
-- Entities are not included unless the schematic was created with //copy -e
+  - Item components (enchantments, damage, custom names) are stripped
+  - Sign text format (front_text/back_text vs Text1-Text4) is not converted
+  - Blocks/items not present in the target MC version become air/are lost
+  - Entities require //copy -e at creation time; this converter does not add them
 """
 
 import gzip
-import sys
 
-from nbt import NBTReader, NBTWriter, find_tag
+from .nbt import NBTReader, NBTWriter, find_tag
 
 
-def convert_item(item_entries: list) -> list:
-    """Convert 1.21+ item format to 1.20.1.
+def _convert_item(item_entries: list) -> list:
+    """Convert a single item's tags from 1.21+ to 1.20.1 format.
 
     - count (Int, tag 3) -> Count (Byte, tag 1)
-    - components compound is removed (enchantments, damage etc. are lost)
+    - components compound is removed
     """
     new = []
     for tag_type, tag_name, tag_val in item_entries:
@@ -40,28 +46,28 @@ def convert_item(item_entries: list) -> list:
     return new
 
 
-def convert_items_list(items_val: tuple) -> tuple:
+def _convert_items_list(items_val: tuple) -> tuple:
     """Convert all items in an Items list tag."""
     if items_val[0] != 'list':
         return items_val
     new_items = []
     for item in items_val[2]:
         if item[0] == 'compound':
-            new_items.append(('compound', convert_item(item[1])))
+            new_items.append(('compound', _convert_item(item[1])))
         else:
             new_items.append(item)
     return ('list', items_val[1], new_items)
 
 
-def convert_block_entity_data(entries: list) -> list:
-    """Convert the inner Data compound of a BlockEntity.
+def _convert_block_entity_data(entries: list) -> list:
+    """Convert the inner Data compound of a v3 BlockEntity.
 
     Processes Items lists and removes components.
     """
     new = []
     for tag_type, tag_name, tag_val in entries:
         if tag_name == 'Items' and tag_val[0] == 'list':
-            new.append((tag_type, tag_name, convert_items_list(tag_val)))
+            new.append((tag_type, tag_name, _convert_items_list(tag_val)))
         elif tag_name == 'components':
             continue
         else:
@@ -72,12 +78,12 @@ def convert_block_entity_data(entries: list) -> list:
 def convert_v3_to_v2(input_path: str, output_path: str) -> None:
     """Convert a Sponge Schematic v3 file to v2 format.
 
-    Conversion steps:
-    1. Unwrap root structure: Root("") -> Schematic -> ... becomes Root("Schematic") -> ...
-    2. Expand Blocks compound: Palette, Data->BlockData, BlockEntities to root level
-    3. Unwrap BlockEntity Data compounds
-    4. Convert item format: count(Int)->Count(Byte), remove components
-    5. Set Version tag to 2, add PaletteMax
+    Steps:
+      1. Unwrap root: Root("") -> Schematic -> ... => Root("Schematic") -> ...
+      2. Expand Blocks compound: Palette, Data->BlockData, BlockEntities
+      3. Flatten BlockEntity Data compounds
+      4. Convert item format: count(Int)->Count(Byte), strip components
+      5. Set Version=2, add PaletteMax
     """
     print(f'Input:  {input_path}')
     print(f'Output: {output_path}')
@@ -90,7 +96,8 @@ def convert_v3_to_v2(input_path: str, output_path: str) -> None:
     root_name = reader.read_string()
     root = reader.read_payload(root_type)
 
-    # v3: Root("") -> Schematic compound; v2: Root("Schematic") -> direct
+    # v3: Root("") -> Schematic compound
+    # v2: Root("Schematic") -> tags directly
     if root_name == '' or root_name == 'Schematic':
         _, schem = find_tag(root, 'Schematic')
         if schem is None:
@@ -138,13 +145,12 @@ def convert_v3_to_v2(input_path: str, output_path: str) -> None:
                         ect, ecv = entity_map['Pos']
                         new_entry.append((ect, 'Pos', ecv))
 
-                    # Unwrap Data compound: move inner tags to parent level
                     if 'Data' in entity_map:
                         ect, ecv = entity_map['Data']
                         if ecv[0] == 'compound':
-                            inner = convert_block_entity_data(ecv[1])
+                            inner = _convert_block_entity_data(ecv[1])
                             for dct, dcn, dcv in inner:
-                                if dcn == 'id':  # skip lowercase id (duplicate of Id)
+                                if dcn == 'id':
                                     continue
                                 new_entry.append((dct, dcn, dcv))
                             if any(dcn == 'Items' for _, dcn, _ in inner):
@@ -171,7 +177,7 @@ def convert_v3_to_v2(input_path: str, output_path: str) -> None:
         f.write(writer.get_bytes())
     print(f'Saved: {output_path}')
 
-    # Verify output structure
+    # Verify
     with gzip.open(output_path, 'rb') as f:
         verify_data = f.read()
     vr = NBTReader(verify_data)
@@ -186,12 +192,3 @@ def convert_v3_to_v2(input_path: str, output_path: str) -> None:
     print(f'Verify: Palette exists = {vpal is not None}')
     _, vbd = find_tag(vroot, 'BlockData')
     print(f'Verify: BlockData exists = {vbd is not None}')
-
-
-if __name__ == '__main__':
-    if len(sys.argv) < 3:
-        print(f'Usage: {sys.argv[0]} <input.schem> <output.schem>')
-        print()
-        print('Convert Sponge Schematic v3 (MC 1.20.5+) to v2 (WorldEdit 7.2.x)')
-        sys.exit(1)
-    convert_v3_to_v2(sys.argv[1], sys.argv[2])

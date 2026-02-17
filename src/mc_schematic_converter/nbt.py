@@ -1,4 +1,32 @@
-"""Minimal NBT (Named Binary Tag) reader/writer for Minecraft schematic files."""
+"""Minimal NBT (Named Binary Tag) reader/writer for Minecraft schematic files.
+
+NBT is a tree-based binary format used by Minecraft for structured data storage.
+All multi-byte integers are big-endian. Strings are modified UTF-8 with a
+unsigned 16-bit length prefix.
+
+Tag types:
+    0  = TAG_End
+    1  = TAG_Byte
+    2  = TAG_Short
+    3  = TAG_Int
+    4  = TAG_Long
+    5  = TAG_Float
+    6  = TAG_Double
+    7  = TAG_Byte_Array
+    8  = TAG_String
+    9  = TAG_List
+    10 = TAG_Compound
+    11 = TAG_Int_Array
+    12 = TAG_Long_Array
+
+Internal representation:
+    Each tag value is a tuple where the first element is the type name string.
+    - Scalar:     ('byte', value), ('int', value), etc.
+    - String:     ('string', value)
+    - Arrays:     ('byte_array', length, bytes), ('int_array', length, [ints]), ...
+    - List:       ('list', element_tag_type, [items])
+    - Compound:   ('compound', [(child_tag_type, child_name, child_value), ...])
+"""
 
 import io
 import struct
@@ -155,7 +183,10 @@ class NBTWriter:
 
 
 def find_tag(compound: tuple, name: str) -> tuple:
-    """Find a named tag within a compound. Returns (tag_type, value) or (None, None)."""
+    """Find a named tag within a compound.
+
+    Returns (tag_type, value) or (None, None) if not found.
+    """
     for ct, cn, cv in compound[1]:
         if cn == name:
             return ct, cv
