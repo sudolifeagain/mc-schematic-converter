@@ -59,6 +59,40 @@ def _convert_items_list(items_val: tuple) -> tuple:
     return ('list', items_val[1], new_items)
 
 
+# Paper/Bukkit/Spigot specific tags incompatible with Forge
+_PAPER_TAGS = frozenset({
+    'Paper.SpawnReason', 'Paper.Origin', 'Paper.OriginWorld', 'Paper.ShouldBurnInDay',
+    'Bukkit.updateLevel', 'Bukkit.Aware', 'Spigot.ticksLived',
+    'WorldUUIDMost', 'WorldUUIDLeast',
+})
+
+
+def _convert_entity_nbt(entries: list) -> list:
+    """Convert entity NBT from 1.21+ to 1.20.1 format.
+
+    - block_pos (IntArray[3]) -> TileX, TileY, TileZ (separate Int tags)
+    - Item compound: count->Count, strip components
+    - Strip Paper/Bukkit/Spigot specific tags
+    """
+    new = []
+    tile_xyz = None
+    for tag_type, tag_name, tag_val in entries:
+        if tag_name in _PAPER_TAGS:
+            continue
+        if tag_name == 'block_pos' and tag_val[0] == 'int_array' and tag_val[1] == 3:
+            tile_xyz = tag_val[2]
+            continue
+        if tag_name == 'Item' and tag_val[0] == 'compound':
+            new.append((tag_type, tag_name, ('compound', _convert_item(tag_val[1]))))
+            continue
+        new.append((tag_type, tag_name, tag_val))
+    if tile_xyz is not None:
+        new.append((3, 'TileX', ('int', tile_xyz[0])))
+        new.append((3, 'TileY', ('int', tile_xyz[1])))
+        new.append((3, 'TileZ', ('int', tile_xyz[2])))
+    return new
+
+
 def _convert_block_entity_data(entries: list) -> list:
     """Convert the inner Data compound of a v3 BlockEntity.
 
@@ -139,6 +173,7 @@ def convert_v3_to_v2(input_path: str, output_path: str) -> None:
                                 if dcn in ('id', 'Pos'):
                                     continue
                                 new_entry.append((dct, dcn, dcv))
+                    new_entry = _convert_entity_nbt(new_entry)
                     converted_entities.append(('compound', new_entry))
                 v2_entries.append((9, 'Entities', ('list', 10, converted_entities)))
                 print(f'Entities: {len(converted_entities)} converted')
