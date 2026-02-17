@@ -115,6 +115,12 @@ def convert_v3_to_v2(input_path: str, output_path: str) -> None:
             v2_entries.append((3, 'Version', ('int', 2)))
             print('Version -> 2')
 
+        elif cn == 'Entities':
+            # v3 entity format lacks Rotation tag expected by WorldEdit 7.2.x
+            # Entity conversion between MC versions is unreliable; skip entirely
+            entity_count = len(cv[2]) if cv[0] == 'list' else 0
+            print(f'Entities: {entity_count} skipped (not supported in v2 conversion)')
+
         elif cn == 'Blocks':
             blocks = {bcn: (bct, bcv) for bct, bcn, bcv in cv[1]}
 
