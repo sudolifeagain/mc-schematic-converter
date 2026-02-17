@@ -67,12 +67,12 @@ _PAPER_TAGS = frozenset({
     'WorldUUIDMost', 'WorldUUIDLeast',
 })
 
-
 def _convert_entity_nbt(entries: list) -> list:
     """Convert entity NBT from 1.21+ to 1.20.1 format.
 
     - block_pos (IntArray[3]) -> TileX, TileY, TileZ (separate Int tags)
       block_pos contains absolute world coords; derive from relative Pos instead
+    - facing (lowercase, 1.21+) -> Facing (uppercase, 1.20.1); value unchanged (both use 3D ordinals)
     - Item compound: count->Count, strip components
     - Strip Paper/Bukkit/Spigot specific tags
     """
@@ -86,6 +86,9 @@ def _convert_entity_nbt(entries: list) -> list:
             pos_values = [item[1] for item in tag_val[2]]
         if tag_name == 'block_pos' and tag_val[0] == 'int_array' and tag_val[1] == 3:
             has_block_pos = True
+            continue
+        if tag_name == 'facing' and tag_val[0] == 'byte':
+            new.append((1, 'Facing', ('byte', tag_val[1])))
             continue
         if tag_name == 'Item' and tag_val[0] == 'compound':
             new.append((tag_type, tag_name, ('compound', _convert_item(tag_val[1]))))
