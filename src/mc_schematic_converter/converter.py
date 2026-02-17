@@ -75,12 +75,15 @@ def _convert_entity_nbt(entries: list) -> list:
     - facing (lowercase, 1.21+) -> Facing (uppercase, 1.20.1); value unchanged (both use 3D ordinals)
     - Item compound: count->Count, strip components
     - Strip Paper/Bukkit/Spigot specific tags
+    - Strip UUID to prevent duplicate entity rejection on re-paste
     """
     new = []
     has_block_pos = False
     pos_values = None
     for tag_type, tag_name, tag_val in entries:
         if tag_name in _PAPER_TAGS:
+            continue
+        if tag_name == 'UUID':
             continue
         if tag_name == 'Pos' and tag_val[0] == 'list' and len(tag_val[2]) >= 3:
             pos_values = [item[1] for item in tag_val[2]]
@@ -157,6 +160,10 @@ def convert_v3_to_v2(input_path: str, output_path: str) -> None:
             v2_entries.append((3, 'Version', ('int', 2)))
             print('Version -> 2')
 
+        elif cn == 'DataVersion':
+            v2_entries.append((3, 'DataVersion', ('int', 3465)))
+            print(f'DataVersion {cv[1]} -> 3465 (1.20.1)')
+
         elif cn == 'Entities':
             # v3: {Id, Pos, Data: {id, Pos, Rotation, ...}}
             # v2: {Id, Pos, Rotation, ...} (Data unwrapped)
@@ -205,6 +212,10 @@ def convert_v3_to_v2(input_path: str, output_path: str) -> None:
                 print(f'Entities: {len(converted_entities)} converted')
             else:
                 print('Entities: 0')
+
+        elif cn == 'Offset':
+            v2_entries.append((11, 'Offset', ('int_array', 3, [0, 0, 0])))
+            print('Offset -> [0, 0, 0] (reset for v2 entity compatibility)')
 
         elif cn == 'Blocks':
             blocks = {bcn: (bct, bcv) for bct, bcn, bcv in cv[1]}
