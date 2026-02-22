@@ -60,18 +60,19 @@ def _convert_components_to_tag(components_val: tuple) -> list:
 
     for _, comp_name, comp_val in components_val[1]:
         if comp_name == 'minecraft:enchantments' and comp_val[0] == 'compound':
+            # Two formats: direct {ench_id: lvl, ...} or wrapped {levels: {ench_id: lvl, ...}}
             _, levels = find_tag(comp_val, 'levels')
-            if levels is not None:
-                ench_list = _convert_enchantments(levels)
-                if ench_list:
-                    tag_entries.append((9, 'Enchantments', ('list', 10, ench_list)))
+            source = levels if levels is not None else comp_val
+            ench_list = _convert_enchantments(source)
+            if ench_list:
+                tag_entries.append((9, 'Enchantments', ('list', 10, ench_list)))
 
         elif comp_name == 'minecraft:stored_enchantments' and comp_val[0] == 'compound':
             _, levels = find_tag(comp_val, 'levels')
-            if levels is not None:
-                ench_list = _convert_enchantments(levels)
-                if ench_list:
-                    tag_entries.append((9, 'StoredEnchantments', ('list', 10, ench_list)))
+            source = levels if levels is not None else comp_val
+            ench_list = _convert_enchantments(source)
+            if ench_list:
+                tag_entries.append((9, 'StoredEnchantments', ('list', 10, ench_list)))
 
         elif comp_name == 'minecraft:damage':
             val = comp_val[1] if len(comp_val) > 1 else 0

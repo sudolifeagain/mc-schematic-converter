@@ -54,6 +54,24 @@ def test_convert_components_enchantments():
     assert len(tag_val[2]) == 1
 
 
+def test_convert_components_enchantments_direct():
+    """minecraft:enchantments without levels wrapper (Paper format)."""
+    components = ('compound', [
+        (10, 'minecraft:enchantments', ('compound', [
+            (3, 'minecraft:unbreaking', ('int', 3)),
+            (3, 'minecraft:efficiency', ('int', 4)),
+        ])),
+    ])
+    result = _convert_components_to_tag(components)
+    assert len(result) == 1
+    tag_type, tag_name, tag_val = result[0]
+    assert tag_name == 'Enchantments'
+    assert len(tag_val[2]) == 2
+    entries = {e[1][0][2][1]: e[1][1][2][1] for e in tag_val[2]}
+    assert entries['minecraft:unbreaking'] == 3
+    assert entries['minecraft:efficiency'] == 4
+
+
 def test_convert_components_stored_enchantments():
     """minecraft:stored_enchantments -> StoredEnchantments (enchanted books)."""
     components = ('compound', [
