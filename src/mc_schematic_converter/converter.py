@@ -11,13 +11,12 @@ the NBT layout compared to v2 (used by WorldEdit 7.2.x):
   v2 structure:
     Root("Schematic") -> Version, Palette, PaletteMax, BlockData, BlockEntities
     BlockEntity: {Id, Pos, Items, ...}
-    Item: {id, Count(Byte), Slot}
+    Item: {id, Count(Byte), Slot, tag: {Enchantments, Damage, display, ...}}
 
 This module performs the structural conversion so that v3 schematics can be
 loaded by WorldEdit 7.2.x (which only supports v1/v2).
 
 Known limitations:
-  - Item components (enchantments, damage, custom names) are stripped
   - Sign text format (front_text/back_text vs Text1-Text4) is not converted
   - Blocks/items not present in the target MC version become air/are lost
   - Entities require //copy -e at creation time; this converter does not add them
@@ -29,21 +28,100 @@ import math
 from .nbt import NBTReader, NBTWriter, find_tag
 
 
+def _convert_enchantments(levels_compound: tuple) -> list:
+    """Convert 1.21+ enchantment levels compound to 1.20.1 list format.
+
+    1.21+: {levels: {"minecraft:sharpness": 5, "minecraft:unbreaking": 3}}
+    1.20.1: [{id: "minecraft:sharpness", lvl: 5s}, ...]
+    """
+    result = []
+    if levels_compound[0] != 'compound':
+        return result
+    for _, ench_id, ench_val in levels_compound[1]:
+        lvl = ench_val[1] if len(ench_val) > 1 else 1
+        result.append(('compound', [
+            (8, 'id', ('string', ench_id)),
+            (2, 'lvl', ('short', int(lvl))),
+        ]))
+    return result
+
+
+def _convert_components_to_tag(components_val: tuple) -> list:
+    """Convert 1.21+ item components compound to 1.20.1 tag entries.
+
+    Returns a list of (tag_type, tag_name, tag_value) tuples that form
+    the contents of the legacy 'tag' compound.
+    """
+    if components_val[0] != 'compound':
+        return []
+
+    tag_entries = []
+    display_entries = []
+
+    for _, comp_name, comp_val in components_val[1]:
+        if comp_name == 'minecraft:enchantments' and comp_val[0] == 'compound':
+            _, levels = find_tag(comp_val, 'levels')
+            if levels is not None:
+                ench_list = _convert_enchantments(levels)
+                if ench_list:
+                    tag_entries.append((9, 'Enchantments', ('list', 10, ench_list)))
+
+        elif comp_name == 'minecraft:stored_enchantments' and comp_val[0] == 'compound':
+            _, levels = find_tag(comp_val, 'levels')
+            if levels is not None:
+                ench_list = _convert_enchantments(levels)
+                if ench_list:
+                    tag_entries.append((9, 'StoredEnchantments', ('list', 10, ench_list)))
+
+        elif comp_name == 'minecraft:damage':
+            val = comp_val[1] if len(comp_val) > 1 else 0
+            tag_entries.append((3, 'Damage', ('int', int(val))))
+
+        elif comp_name == 'minecraft:repair_cost':
+            val = comp_val[1] if len(comp_val) > 1 else 0
+            tag_entries.append((3, 'RepairCost', ('int', int(val))))
+
+        elif comp_name == 'minecraft:custom_model_data':
+            val = comp_val[1] if len(comp_val) > 1 else 0
+            tag_entries.append((3, 'CustomModelData', ('int', int(val))))
+
+        elif comp_name == 'minecraft:custom_name' and comp_val[0] == 'string':
+            display_entries.append((8, 'Name', comp_val))
+
+        elif comp_name == 'minecraft:lore' and comp_val[0] == 'list':
+            display_entries.append((9, 'Lore', comp_val))
+
+        elif comp_name == 'minecraft:unbreakable':
+            tag_entries.append((1, 'Unbreakable', ('byte', 1)))
+
+    if display_entries:
+        tag_entries.append((10, 'display', ('compound', display_entries)))
+
+    return tag_entries
+
+
 def _convert_item(item_entries: list) -> list:
     """Convert a single item's tags from 1.21+ to 1.20.1 format.
 
     - count (Int, tag 3) -> Count (Byte, tag 1)
-    - components compound is removed
+    - components compound -> legacy tag compound
     """
     new = []
+    components_val = None
     for tag_type, tag_name, tag_val in item_entries:
         if tag_name == 'count':
             val = min(127, max(0, tag_val[1]))
             new.append((1, 'Count', ('byte', val)))
         elif tag_name == 'components':
-            continue
+            components_val = tag_val
         else:
             new.append((tag_type, tag_name, tag_val))
+
+    if components_val is not None:
+        tag_entries = _convert_components_to_tag(components_val)
+        if tag_entries:
+            new.append((10, 'tag', ('compound', tag_entries)))
+
     return new
 
 
@@ -107,16 +185,23 @@ def _convert_entity_nbt(entries: list) -> list:
 def _convert_block_entity_data(entries: list) -> list:
     """Convert the inner Data compound of a v3 BlockEntity.
 
-    Processes Items lists and removes components.
+    Processes Items lists and converts components to legacy format.
     """
     new = []
+    components_val = None
     for tag_type, tag_name, tag_val in entries:
         if tag_name == 'Items' and tag_val[0] == 'list':
             new.append((tag_type, tag_name, _convert_items_list(tag_val)))
         elif tag_name == 'components':
-            continue
+            components_val = tag_val
         else:
             new.append((tag_type, tag_name, tag_val))
+
+    if components_val is not None:
+        tag_entries = _convert_components_to_tag(components_val)
+        for entry in tag_entries:
+            new.append(entry)
+
     return new
 
 
@@ -127,7 +212,7 @@ def convert_v3_to_v2(input_path: str, output_path: str) -> None:
       1. Unwrap root: Root("") -> Schematic -> ... => Root("Schematic") -> ...
       2. Expand Blocks compound: Palette, Data->BlockData, BlockEntities
       3. Flatten BlockEntity Data compounds
-      4. Convert item format: count(Int)->Count(Byte), strip components
+      4. Convert item format: count(Int)->Count(Byte), components->legacy tag
       5. Set Version=2, add PaletteMax
     """
     print(f'Input:  {input_path}')
